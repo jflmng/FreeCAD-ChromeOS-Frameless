@@ -6,9 +6,12 @@
 - Double-click empty menu bar space to maximise / restore.
 - Press within a few pixels of the window edge and drag to resize.
 - Minimise / maximise / close buttons at the right end of the menu bar.
+- When FreeCAD runs from an AppImage, adds a launcher so the ChromeOS shelf
+  shows FreeCAD's icon instead of the generic Linux penguin.
 
 Disable: launch with FREECAD_FRAMED=1, or uninstall the add-on.
 """
+import glob
 import os
 import shutil
 import subprocess
@@ -19,9 +22,16 @@ from PySide import QtCore, QtGui, QtWidgets
 
 EDGE = 8  # px band at the window border that starts a resize
 
+APP_ID = "org.freecad.FreeCAD"  # FreeCAD's own desktop/icon id
+GENERATED_KEY = "X-ChromeOS-Frameless-Generated"
+
+
+def _on_chromeos():
+    return os.path.isdir("/opt/google/cros-containers")
+
 
 def _wanted():
-    if not (os.path.isdir("/opt/google/cros-containers")
+    if not (_on_chromeos()
             and os.environ.get("FREECAD_FRAMED") != "1"
             and QtGui.QGuiApplication.platformName() == "xcb"):
         return False
@@ -230,6 +240,79 @@ def _apply():
     QtWidgets.QApplication.instance().installEventFilter(mw._window_controls)
 
 
+def _launcher_text(appimage):
+    return (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=FreeCAD\n"
+        "Comment=Parametric 3D CAD modeller\n"
+        f'Exec="{appimage}" %F\n'
+        f"Icon={APP_ID}\n"
+        "Terminal=false\n"
+        "Categories=Science;Engineering;\n"
+        "MimeType=application/x-extension-fcstd;\n"
+        # ChromeOS matches running windows to launchers by WM_CLASS; without
+        # this the shelf shows a penguin.
+        "StartupWMClass=FreeCAD\n"
+        f"{GENERATED_KEY}=true\n"
+    )
+
+
+def ensure_launcher(data_home=None):
+    """Give an AppImage FreeCAD a launcher and icon so ChromeOS can show the
+    right shelf icon. Leaves any launcher it didn't write untouched."""
+    appimage, appdir = os.environ.get("APPIMAGE"), os.environ.get("APPDIR")
+    if not appimage or not appdir:
+        return  # distro packages ship their own launcher and icon
+    data_home = data_home or os.environ.get(
+        "XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    apps = os.path.join(data_home, "applications")
+    ours = os.path.join(apps, APP_ID + ".desktop")
+
+    for path in glob.glob(os.path.join(apps, "*.desktop")):
+        if path == ours:
+            continue
+        with open(path, encoding="utf-8", errors="replace") as f:
+            if "StartupWMClass=FreeCAD" in f.read():
+                return  # the user already has a FreeCAD launcher
+
+    icons = os.path.join(data_home, "icons", "hicolor")
+    svg = os.path.join(appdir, APP_ID + ".svg")
+    svg_dest = os.path.join(icons, "scalable", "apps", APP_ID + ".svg")
+    if os.path.isfile(svg) and not os.path.isfile(svg_dest):
+        os.makedirs(os.path.dirname(svg_dest), exist_ok=True)
+        shutil.copyfile(svg, svg_dest)
+        # PNGs too: ChromeOS picks these up more reliably than SVG alone.
+        icon = QtGui.QIcon(svg_dest)
+        for size in (48, 64, 128, 256):
+            png = os.path.join(icons, f"{size}x{size}", "apps", APP_ID + ".png")
+            os.makedirs(os.path.dirname(png), exist_ok=True)
+            # Explicit ratio 1: icon sizes are real pixels, not scaled.
+            icon.pixmap(QtCore.QSize(size, size), 1.0).save(png)
+
+    text = _launcher_text(appimage)
+    if os.path.isfile(ours):
+        with open(ours, encoding="utf-8") as f:
+            current = f.read()
+        if GENERATED_KEY not in current or current == text:
+            return  # someone else's file, or already up to date
+    os.makedirs(apps, exist_ok=True)
+    with open(ours, "w", encoding="utf-8") as f:
+        f.write(text)
+    App.Console.PrintMessage(
+        "ChromeOS Frameless: added a FreeCAD launcher so the shelf shows "
+        "FreeCAD's icon. Restart FreeCAD to see it.\n")
+
+
+def _ensure_launcher_safely():
+    try:
+        ensure_launcher()
+    except OSError as e:
+        App.Console.PrintWarning(f"ChromeOS Frameless: couldn't add launcher: {e}\n")
+
+
 def install():
+    if _on_chromeos():
+        QtCore.QTimer.singleShot(1500, _ensure_launcher_safely)
     if _wanted():
         QtCore.QTimer.singleShot(1000, _apply)
