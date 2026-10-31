@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright (c) 2026 James Fleming
-"""Hide the ChromeOS title bar on FreeCAD's main window (Crostini, X11).
+"""Hide the ChromeOS title bar on FreeCAD's windows (Crostini, X11).
 
 - Drag empty space on the menu bar to move the window.
 - Double-click empty menu bar space to maximise / restore.
@@ -15,45 +15,46 @@ Disable: launch with FREECAD_FRAMED=1, or uninstall the add-on.
 import glob
 import os
 import shutil
-import subprocess
 
 import FreeCAD as App
 import FreeCADGui as Gui
 from PySide import QtCore, QtGui, QtWidgets
+
+Qt, QEvent = QtCore.Qt, QtCore.QEvent
 
 EDGE = 8  # px band at the window border that starts a resize
 
 APP_ID = "org.freecad.FreeCAD"  # FreeCAD's own desktop/icon id
 GENERATED_KEY = "X-ChromeOS-Frameless-Generated"
 
+# Widgets whose empty area can be dragged to move a frameless dialog. Matched
+# on the C++ class name so FreeCAD's own QWidget subclasses don't count.
+BACKGROUND_CLASSES = {"QWidget", "QFrame", "QLabel", "QGroupBox"}
+
+# Button icons as polylines on a 16 px grid.
+GLYPHS = {
+    "min": [[(3.5, 8.5), (12.5, 8.5)]],
+    "max": [[(3.5, 3.5), (12.5, 3.5), (12.5, 12.5), (3.5, 12.5), (3.5, 3.5)]],
+    "restore": [[(3.5, 5.5), (10.5, 5.5), (10.5, 12.5), (3.5, 12.5), (3.5, 5.5)],
+                [(5.5, 5.5), (5.5, 3.5), (12.5, 3.5), (12.5, 10.5), (10.5, 10.5)]],
+    "close": [[(3.5, 3.5), (12.5, 12.5)], [(12.5, 3.5), (3.5, 12.5)]],
+}
+
 
 def _on_chromeos():
     return os.path.isdir("/opt/google/cros-containers")
 
 
-def _wanted():
-    if not (_on_chromeos()
-            and os.environ.get("FREECAD_FRAMED") != "1"
-            and QtGui.QGuiApplication.platformName() == "xcb"):
-        return False
-    if shutil.which("xprop") is None:
-        App.Console.PrintWarning(
-            "ChromeOS Frameless: 'xprop' not found; install it with "
-            "'sudo apt install x11-utils'. Leaving the title bar alone.\n")
-        return False
-    return True
-
-
-# Widgets whose empty area can be dragged to move a frameless dialog. Matched
-# on the C++ class name so FreeCAD's own QWidget subclasses don't count.
-BACKGROUND_CLASSES = {"QWidget", "QFrame", "QLabel", "QGroupBox"}
-TEXT_INTERACTIVE = (QtCore.Qt.TextSelectableByMouse
-                    | QtCore.Qt.LinksAccessibleByMouse)
-
-
 def _is_dialog(widget):
     return (isinstance(widget, QtWidgets.QDialog) and widget.isWindow()
-            and widget.windowType() == QtCore.Qt.Dialog)
+            and widget.windowType() == Qt.Dialog)
+
+
+def _make_frameless(win):
+    """ChromeOS's X11 bridge (sommelier) drops its title bar for windows that
+    ask for no decorations, but only reads that when the window is mapped,
+    so call this before the window is first shown."""
+    win.setWindowFlag(Qt.FramelessWindowHint, True)
 
 
 def _is_background(widget):
@@ -62,7 +63,8 @@ def _is_background(widget):
     if widget.metaObject().className() not in BACKGROUND_CLASSES:
         return False
     if isinstance(widget, QtWidgets.QLabel):
-        return not widget.textInteractionFlags() & TEXT_INTERACTIVE
+        return not widget.textInteractionFlags() & (
+            Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
     if isinstance(widget, QtWidgets.QGroupBox):
         return not widget.isCheckable()
     return True
@@ -72,18 +74,32 @@ def _edges_at(win, gpos):
     """Qt.Edges for a global point near the border of win, or None."""
     if win.isMaximized() or win.isFullScreen():
         return None
-    p = win.mapFromGlobal(gpos)
-    r = win.rect()
-    edges = QtCore.Qt.Edges()
+    p, r = win.mapFromGlobal(gpos), win.rect()
+    edges = Qt.Edges()
     if p.x() < EDGE:
-        edges |= QtCore.Qt.LeftEdge
+        edges |= Qt.LeftEdge
     elif p.x() > r.width() - EDGE:
-        edges |= QtCore.Qt.RightEdge
+        edges |= Qt.RightEdge
     if p.y() < EDGE:
-        edges |= QtCore.Qt.TopEdge
+        edges |= Qt.TopEdge
     elif p.y() > r.height() - EDGE:
-        edges |= QtCore.Qt.BottomEdge
-    return edges if edges != QtCore.Qt.Edges() else None
+        edges |= Qt.BottomEdge
+    return edges or None
+
+
+# Cursor to show over each edge / corner of a frameless window.
+EDGE_CURSORS = {
+    Qt.LeftEdge: Qt.SizeHorCursor, Qt.RightEdge: Qt.SizeHorCursor,
+    Qt.TopEdge: Qt.SizeVerCursor, Qt.BottomEdge: Qt.SizeVerCursor,
+    Qt.TopEdge | Qt.LeftEdge: Qt.SizeFDiagCursor,
+    Qt.BottomEdge | Qt.RightEdge: Qt.SizeFDiagCursor,
+    Qt.TopEdge | Qt.RightEdge: Qt.SizeBDiagCursor,
+    Qt.BottomEdge | Qt.LeftEdge: Qt.SizeBDiagCursor,
+}
+
+
+def _toggle_max(win):
+    win.showNormal() if win.isMaximized() else win.showMaximized()
 
 
 def _glyph(kind, color):
@@ -91,28 +107,20 @@ def _glyph(kind, color):
     ratio = QtWidgets.QApplication.instance().devicePixelRatio()
     pm = QtGui.QPixmap(int(16 * ratio), int(16 * ratio))
     pm.setDevicePixelRatio(ratio)
-    pm.fill(QtCore.Qt.transparent)
+    pm.fill(Qt.transparent)
     p = QtGui.QPainter(pm)
     p.setRenderHint(QtGui.QPainter.Antialiasing)
-    pen = QtGui.QPen(color, 1.2)
-    p.setPen(pen)
-    if kind == "min":
-        p.drawLine(QtCore.QPointF(3.5, 8.5), QtCore.QPointF(12.5, 8.5))
-    elif kind == "max":
-        p.drawRect(QtCore.QRectF(3.5, 3.5, 9, 9))
-    elif kind == "restore":
-        p.drawRect(QtCore.QRectF(3.5, 5.5, 7, 7))
-        p.drawPolyline([QtCore.QPointF(5.5, 5.5), QtCore.QPointF(5.5, 3.5),
-                        QtCore.QPointF(12.5, 3.5), QtCore.QPointF(12.5, 10.5),
-                        QtCore.QPointF(10.5, 10.5)])
-    elif kind == "close":
-        p.drawLine(QtCore.QPointF(3.5, 3.5), QtCore.QPointF(12.5, 12.5))
-        p.drawLine(QtCore.QPointF(12.5, 3.5), QtCore.QPointF(3.5, 12.5))
+    p.setPen(QtGui.QPen(color, 1.2))
+    for line in GLYPHS[kind]:
+        p.drawPolyline([QtCore.QPointF(x, y) for x, y in line])
     p.end()
     return QtGui.QIcon(pm)
 
 
 class _TitleButtons(QtWidgets.QWidget):
+    """Minimise / maximise / close, overlaid on the right end of the menu bar.
+    Not the bar's corner widget: FreeCAD replaces (and deletes) that when it
+    sets up the workbench selector."""
     STYLE = """
         QToolButton { border: none; padding: 3px 10px; background: transparent; }
         QToolButton:hover { background: rgba(128, 128, 128, 70); }
@@ -120,43 +128,45 @@ class _TitleButtons(QtWidgets.QWidget):
     """
 
     def __init__(self, mw):
-        super().__init__()
+        super().__init__(mw.menuBar())
         self.mw = mw
         self.setStyleSheet(self.STYLE)
         lay = QtWidgets.QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        self.min_btn = self._button("Minimise", mw.showMinimized)
-        self.max_btn = self._button("Maximise", self._toggle_max)
-        self.close_btn = self._button("Close", mw.close)
+        self.min_btn, self.max_btn, self.close_btn = (
+            self._button(lay, slot) for slot in (
+                mw.showMinimized, lambda: _toggle_max(mw), mw.close))
+        self.min_btn.setToolTip("Minimise")
+        self.close_btn.setToolTip("Close")
         self.close_btn.setObjectName("close")
-        for b in (self.min_btn, self.max_btn, self.close_btn):
-            lay.addWidget(b)
-        self.update_icons()
+        self.show()
+        self.place()
 
-    def _button(self, tip, slot):
+    def _button(self, lay, slot):
         b = QtWidgets.QToolButton(self)
-        b.setToolTip(tip)
-        b.setFocusPolicy(QtCore.Qt.NoFocus)
+        b.setFocusPolicy(Qt.NoFocus)
         b.clicked.connect(slot)
+        lay.addWidget(b)
         return b
 
-    def _toggle_max(self):
-        if self.mw.isMaximized():
-            self.mw.showNormal()
-        else:
-            self.mw.showMaximized()
+    def place(self):
+        bar = self.parentWidget()
+        self.adjustSize()
+        self.setFixedHeight(bar.height())
+        self.move(bar.width() - self.width(), 0)
+        self.raise_()
+        self.update_icons()
 
     def _icon_color(self):
         """Contrast with the menu bar as actually drawn: FreeCAD's themes are
         stylesheets, so the palette's text colour can't be trusted."""
         bar = self.parentWidget()
-        if not isinstance(bar, QtWidgets.QMenuBar) or bar.width() <= self.width():
+        if bar.width() <= self.width():
             return self.palette().color(QtGui.QPalette.WindowText)
         img = bar.grab().toImage()
         ratio = img.width() / bar.width()
-        x = int((bar.width() - self.width() - 10) * ratio)
-        bg = img.pixelColor(x, int(2 * ratio))
+        bg = img.pixelColor(int((bar.width() - self.width() - 10) * ratio), int(2 * ratio))
         return QtGui.QColor(225, 225, 225) if bg.lightness() < 128 else QtGui.QColor(30, 30, 30)
 
     def update_icons(self):
@@ -168,31 +178,31 @@ class _TitleButtons(QtWidgets.QWidget):
         self.close_btn.setIcon(_glyph("close", color))
 
 
-def _place_buttons(bar, buttons):
-    buttons.adjustSize()
-    buttons.setFixedHeight(bar.height())
-    buttons.move(bar.width() - buttons.width(), 0)
-    buttons.raise_()
-
-
 class _WindowControls(QtCore.QObject):
-    BAR_EVENTS = (QtCore.QEvent.Resize, QtCore.QEvent.LayoutRequest)
-    WINDOW_EVENTS = (QtCore.QEvent.WindowStateChange, QtCore.QEvent.PaletteChange,
-                     QtCore.QEvent.StyleChange)
-    MOUSE_EVENTS = (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonDblClick)
-    EVENTS = BAR_EVENTS + WINDOW_EVENTS + MOUSE_EVENTS + (QtCore.QEvent.Polish,)
+    """App-wide event filter: frameless dialogs, button upkeep, and
+    move / resize by mouse (with resize cursors at the edges) for the main
+    window and dialogs."""
+    BAR_EVENTS = {QEvent.Resize, QEvent.LayoutRequest}
+    WINDOW_EVENTS = {QEvent.WindowStateChange, QEvent.PaletteChange, QEvent.StyleChange}
+    MOUSE_EVENTS = {QEvent.MouseButtonPress, QEvent.MouseButtonDblClick}
+    HOVER_EVENTS = {QEvent.MouseMove, QEvent.Leave}
+    EVENTS = BAR_EVENTS | WINDOW_EVENTS | MOUSE_EVENTS | HOVER_EVENTS | {QEvent.Polish}
 
-    def __init__(self, mw, buttons):
+    def __init__(self, mw):
         super().__init__(mw)
         self.mw = mw
         self.bar = mw.menuBar()
-        self.buttons = buttons
-        # The app-wide filter must be gone before the main window is torn
-        # down; touching a half-destroyed QMainWindow segfaults on exit.
-        QtWidgets.QApplication.instance().aboutToQuit.connect(self.uninstall)
+        self.buttons = _TitleButtons(mw)
+        self.cursor = None  # resize cursor currently overriding, if any
+        app = QtWidgets.QApplication.instance()
+        app.installEventFilter(self)
+        # The filter must be gone before the main window is torn down;
+        # touching a half-destroyed QMainWindow segfaults on exit.
+        app.aboutToQuit.connect(self.uninstall)
 
     def uninstall(self):
         QtWidgets.QApplication.instance().removeEventFilter(self)
+        self._set_cursor(None)
 
     def eventFilter(self, obj, ev):
         if ev.type() not in self.EVENTS:
@@ -205,85 +215,73 @@ class _WindowControls(QtCore.QObject):
 
     def _filter(self, obj, ev):
         t = ev.type()
-        if t == QtCore.QEvent.Polish:
-            # Sent once, before a widget is first shown: Qt then maps the
-            # dialog already asking for no decorations, so no bar ever shows.
+        if t == QEvent.Polish:  # sent once, before a widget is first shown
             if _is_dialog(obj):
-                obj.setWindowFlag(QtCore.Qt.FramelessWindowHint, True)
-            return False
-        if obj is self.bar and t in self.BAR_EVENTS:
-            _place_buttons(obj, self.buttons)
-            return False
-        if obj is self.mw and t in self.WINDOW_EVENTS:
-            self.buttons.update_icons()
-            return False
-        if t not in self.MOUSE_EVENTS:
-            return False
-        if ev.button() != QtCore.Qt.LeftButton or not isinstance(obj, QtWidgets.QWidget):
-            return False
-        win = obj.window()
-        if win is not self.mw:
-            return self._dialog_mouse(win, obj, ev)
-        if obj is self.buttons or self.buttons.isAncestorOf(obj):
-            return False  # let the buttons work even inside the resize band
-
-        handle = self.mw.windowHandle()
-        if t == QtCore.QEvent.MouseButtonPress:
-            edges = _edges_at(self.mw, ev.globalPosition().toPoint())
-            if edges is not None:
-                handle.startSystemResize(edges)
-                return True
-
-        if obj is self.bar and self.bar.actionAt(ev.position().toPoint()) is None:
-            if t == QtCore.QEvent.MouseButtonDblClick:
-                if self.mw.isMaximized():
-                    self.mw.showNormal()
-                else:
-                    self.mw.showMaximized()
-            else:
-                handle.startSystemMove()
-            return True
+                _make_frameless(obj)
+        elif t in self.BAR_EVENTS:
+            if obj is self.bar:
+                self.buttons.place()
+        elif t in self.WINDOW_EVENTS:
+            if obj is self.mw:
+                self.buttons.update_icons()
+        elif t in self.HOVER_EVENTS:
+            # Watch the QWindow, which gets every move; widgets only get
+            # moves without a button held if they turn on mouse tracking.
+            if isinstance(obj, QtGui.QWindow):
+                self._hover(obj, ev)
+        elif ev.button() == Qt.LeftButton and isinstance(obj, QtWidgets.QWidget):
+            return self._mouse(obj, ev)
         return False
 
-    def _dialog_mouse(self, win, obj, ev):
-        if (ev.type() != QtCore.QEvent.MouseButtonPress or not _is_dialog(win)
-                or not win.windowFlags() & QtCore.Qt.FramelessWindowHint):
-            return False
+    def _ours(self, win):
+        return ((win is self.mw or _is_dialog(win))
+                and bool(win.windowFlags() & Qt.FramelessWindowHint))
+
+    def _on_buttons(self, widget):
+        return widget is self.buttons or self.buttons.isAncestorOf(widget)
+
+    def _hover(self, qwindow, ev):
+        if ev.type() == QEvent.MouseMove and ev.buttons() != Qt.NoButton:
+            return  # mid-drag: leave the cursor alone
+        shape = None
+        widget = QtWidgets.QWidget.find(qwindow.winId())
+        if ev.type() == QEvent.MouseMove and widget and self._ours(widget.window()):
+            gpos = ev.globalPosition().toPoint()
+            edges = _edges_at(widget.window(), gpos)
+            under = QtWidgets.QApplication.widgetAt(gpos) if edges else None
+            if edges and not (under and self._on_buttons(under)):
+                shape = EDGE_CURSORS.get(edges)
+        self._set_cursor(shape)
+
+    def _set_cursor(self, shape):
+        if shape == self.cursor:
+            return
+        if self.cursor is None:
+            QtWidgets.QApplication.setOverrideCursor(shape)
+        elif shape is None:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        else:
+            QtWidgets.QApplication.changeOverrideCursor(shape)
+        self.cursor = shape
+
+    def _mouse(self, obj, ev):
+        win = obj.window()
+        if not self._ours(win) or self._on_buttons(obj):
+            return False  # buttons must work even inside the resize band
+        press = ev.type() == QEvent.MouseButtonPress
         handle = win.windowHandle()
-        edges = _edges_at(win, ev.globalPosition().toPoint())
-        if edges is not None:
+        if press and (edges := _edges_at(win, ev.globalPosition().toPoint())):
             handle.startSystemResize(edges)
             return True
-        if _is_background(obj):
+        if win is self.mw:
+            if obj is not self.bar or self.bar.actionAt(ev.position().toPoint()):
+                return False
+            handle.startSystemMove() if press else _toggle_max(win)
+            return True
+        if press and _is_background(obj):
             handle.startSystemMove()
             return True
         return False
-
-
-def _undecorate(widget):
-    # _MOTIF_WM_HINTS = flags (2: "decorations field is set"), functions,
-    # decorations (0: none), input mode, status. ChromeOS's X11 bridge
-    # (sommelier) drops its title bar for windows that ask for no decorations.
-    subprocess.run(["xprop", "-id", str(int(widget.winId())),
-                    "-f", "_MOTIF_WM_HINTS", "32c",
-                    "-set", "_MOTIF_WM_HINTS", "2, 0, 0, 0, 0"], check=False)
-
-
-def _apply():
-    mw = Gui.getMainWindow()
-    _undecorate(mw)
-
-    # Overlay on the menu bar rather than its corner widget: FreeCAD replaces
-    # (and deletes) the corner widget when it sets up the workbench selector.
-    bar = mw.menuBar()
-    buttons = _TitleButtons(mw)
-    buttons.setParent(bar)
-    buttons.show()
-    _place_buttons(bar, buttons)
-    buttons.update_icons()  # now that the bar's real background is known
-
-    mw._window_controls = _WindowControls(mw, buttons)
-    QtWidgets.QApplication.instance().installEventFilter(mw._window_controls)
 
 
 def _launcher_text(appimage):
@@ -315,12 +313,13 @@ def ensure_launcher(data_home=None):
     apps = os.path.join(data_home, "applications")
     ours = os.path.join(apps, APP_ID + ".desktop")
 
-    for path in glob.glob(os.path.join(apps, "*.desktop")):
-        if path == ours:
-            continue
+    def read(path):
         with open(path, encoding="utf-8", errors="replace") as f:
-            if "StartupWMClass=FreeCAD" in f.read():
-                return  # the user already has a FreeCAD launcher
+            return f.read()
+
+    if any("StartupWMClass=FreeCAD" in read(p)
+           for p in glob.glob(os.path.join(apps, "*.desktop")) if p != ours):
+        return  # the user already has a FreeCAD launcher
 
     icons = os.path.join(data_home, "icons", "hicolor")
     svg = os.path.join(appdir, APP_ID + ".svg")
@@ -338,8 +337,7 @@ def ensure_launcher(data_home=None):
 
     text = _launcher_text(appimage)
     if os.path.isfile(ours):
-        with open(ours, encoding="utf-8") as f:
-            current = f.read()
+        current = read(ours)
         if GENERATED_KEY not in current or current == text:
             return  # someone else's file, or already up to date
     os.makedirs(apps, exist_ok=True)
@@ -358,7 +356,17 @@ def _ensure_launcher_safely():
 
 
 def install():
-    if _on_chromeos():
-        QtCore.QTimer.singleShot(1500, _ensure_launcher_safely)
-    if _wanted():
-        QtCore.QTimer.singleShot(1000, _apply)
+    if not _on_chromeos():
+        return
+    QtCore.QTimer.singleShot(1500, _ensure_launcher_safely)
+    if os.environ.get("FREECAD_FRAMED") == "1" \
+            or QtGui.QGuiApplication.platformName() != "xcb":
+        return
+    # Add-ons load before FreeCAD shows its main window, so it gets mapped
+    # frameless from the start.
+    mw = Gui.getMainWindow()
+    visible = mw.isVisible()
+    _make_frameless(mw)
+    if visible:  # changing flags hides a shown window
+        mw.show()
+    QtCore.QTimer.singleShot(0, lambda: setattr(mw, "_window_controls", _WindowControls(mw)))

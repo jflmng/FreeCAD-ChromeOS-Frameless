@@ -7,7 +7,8 @@ and puts the window controls on FreeCAD's menu bar instead:
 
 - **Move:** drag the empty space on the menu bar (to the right of *Help*).
 - **Maximise / restore:** double-click that empty space, or use the □ button.
-- **Resize:** press and drag within 8 px of any window edge.
+- **Resize:** press and drag within 8 px of any window edge. The cursor turns
+  into resize arrows when you're in the right spot.
 - **Minimise / maximise / close:** buttons at the right end of the menu bar.
   Their icons follow your theme: light on dark themes, dark on light ones.
 - **Dialogs:** Preferences, the Addon Manager, message boxes and other dialogs
@@ -27,9 +28,7 @@ ChromeOS keyboard shortcuts keep working: **Alt+=** maximises, **Alt+[** and
 
 ## Requirements
 
-- FreeCAD 1.0 or newer (tested with 1.1.4, Qt 6), running under ChromeOS Linux.
-- `xprop`, which is preinstalled on ChromeOS Linux. If it's missing, install it with
-  `sudo apt install x11-utils`.
+FreeCAD 1.0 or newer (tested with 1.1.4, Qt 6), running under ChromeOS Linux.
 
 Outside ChromeOS, or when FreeCAD runs natively on Wayland, the add-on does
 nothing.
@@ -72,7 +71,6 @@ its icon. It also:
 
 ## Known limitations
 
-- The cursor doesn't change shape over the resize edges, so you have to aim.
 - The splash screen keeps its title bar. It appears before FreeCAD loads
   add-ons. You can turn it off in *Edit → Preferences → General*.
 - Frameless dialogs don't show their title text (for example "Preferences").
@@ -80,9 +78,11 @@ its icon. It also:
 ## How it works
 
 ChromeOS's X11 bridge (*sommelier*) honours the standard `_MOTIF_WM_HINTS`
-property. The add-on uses it to ask for "no decorations". Moving and resizing go
-through Qt's `startSystemMove()` / `startSystemResize()`, which use the
-`_NET_WM_MOVERESIZE` protocol that sommelier supports.
+property, which Qt sets to "no decorations" for frameless windows. Sommelier only
+reads it when a window first appears, so the add-on marks the main window
+frameless before FreeCAD shows it, and marks each dialog just before it opens.
+Moving and resizing go through Qt's `startSystemMove()` / `startSystemResize()`,
+which use the `_NET_WM_MOVERESIZE` protocol that sommelier supports.
 
 ## License
 
