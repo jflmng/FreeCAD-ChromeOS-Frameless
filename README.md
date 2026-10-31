@@ -2,14 +2,17 @@
 
 On a Chromebook, Linux apps run inside ChromeOS's Linux environment (Crostini),
 and ChromeOS adds its own tall, light-grey title bar to every X11 window.
-This FreeCAD add-on removes that bar from FreeCAD's main window and puts the
-window controls on FreeCAD's menu bar instead:
+This FreeCAD add-on removes that bar from FreeCAD's main window and dialogs,
+and puts the window controls on FreeCAD's menu bar instead:
 
 - **Move:** drag the empty space on the menu bar (to the right of *Help*).
 - **Maximise / restore:** double-click that empty space, or use the □ button.
 - **Resize:** press and drag within 8 px of any window edge.
 - **Minimise / maximise / close:** buttons at the right end of the menu bar.
   Their icons follow your theme: light on dark themes, dark on light ones.
+- **Dialogs:** Preferences, the Addon Manager, message boxes and other dialogs
+  open without the bar too. Drag any empty area of a dialog to move it, or drag
+  its edges to resize. Close them with their own buttons or **Esc**.
 - **Shelf icon:** if you run FreeCAD from an **AppImage**, ChromeOS shows a
   generic Linux penguin in the shelf, because an AppImage doesn't register a
   launcher or icon. The add-on installs FreeCAD's icon and a launcher the first
@@ -72,7 +75,7 @@ its icon. It also:
 - The cursor doesn't change shape over the resize edges, so you have to aim.
 - The splash screen keeps its title bar. It appears before FreeCAD loads
   add-ons. You can turn it off in *Edit → Preferences → General*.
-- Only FreeCAD's main window is affected. Separate dialogs keep the ChromeOS bar.
+- Frameless dialogs don't show their title text (for example "Preferences").
 
 ## How it works
 

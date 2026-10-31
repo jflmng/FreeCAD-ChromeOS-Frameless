@@ -6,6 +6,7 @@
 - Double-click empty menu bar space to maximise / restore.
 - Press within a few pixels of the window edge and drag to resize.
 - Minimise / maximise / close buttons at the right end of the menu bar.
+- Dialogs open without a title bar too; drag their background to move them.
 - When FreeCAD runs from an AppImage, adds a launcher so the ChromeOS shelf
   shows FreeCAD's icon instead of the generic Linux penguin.
 
@@ -40,6 +41,30 @@ def _wanted():
             "ChromeOS Frameless: 'xprop' not found; install it with "
             "'sudo apt install x11-utils'. Leaving the title bar alone.\n")
         return False
+    return True
+
+
+# Widgets whose empty area can be dragged to move a frameless dialog. Matched
+# on the C++ class name so FreeCAD's own QWidget subclasses don't count.
+BACKGROUND_CLASSES = {"QWidget", "QFrame", "QLabel", "QGroupBox"}
+TEXT_INTERACTIVE = (QtCore.Qt.TextSelectableByMouse
+                    | QtCore.Qt.LinksAccessibleByMouse)
+
+
+def _is_dialog(widget):
+    return (isinstance(widget, QtWidgets.QDialog) and widget.isWindow()
+            and widget.windowType() == QtCore.Qt.Dialog)
+
+
+def _is_background(widget):
+    if widget.isWindow():
+        return True
+    if widget.metaObject().className() not in BACKGROUND_CLASSES:
+        return False
+    if isinstance(widget, QtWidgets.QLabel):
+        return not widget.textInteractionFlags() & TEXT_INTERACTIVE
+    if isinstance(widget, QtWidgets.QGroupBox):
+        return not widget.isCheckable()
     return True
 
 
@@ -155,7 +180,7 @@ class _WindowControls(QtCore.QObject):
     WINDOW_EVENTS = (QtCore.QEvent.WindowStateChange, QtCore.QEvent.PaletteChange,
                      QtCore.QEvent.StyleChange)
     MOUSE_EVENTS = (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonDblClick)
-    EVENTS = BAR_EVENTS + WINDOW_EVENTS + MOUSE_EVENTS
+    EVENTS = BAR_EVENTS + WINDOW_EVENTS + MOUSE_EVENTS + (QtCore.QEvent.Polish,)
 
     def __init__(self, mw, buttons):
         super().__init__(mw)
@@ -180,6 +205,12 @@ class _WindowControls(QtCore.QObject):
 
     def _filter(self, obj, ev):
         t = ev.type()
+        if t == QtCore.QEvent.Polish:
+            # Sent once, before a widget is first shown: Qt then maps the
+            # dialog already asking for no decorations, so no bar ever shows.
+            if _is_dialog(obj):
+                obj.setWindowFlag(QtCore.Qt.FramelessWindowHint, True)
+            return False
         if obj is self.bar and t in self.BAR_EVENTS:
             _place_buttons(obj, self.buttons)
             return False
@@ -190,8 +221,9 @@ class _WindowControls(QtCore.QObject):
             return False
         if ev.button() != QtCore.Qt.LeftButton or not isinstance(obj, QtWidgets.QWidget):
             return False
-        if obj.window() is not self.mw:
-            return False
+        win = obj.window()
+        if win is not self.mw:
+            return self._dialog_mouse(win, obj, ev)
         if obj is self.buttons or self.buttons.isAncestorOf(obj):
             return False  # let the buttons work even inside the resize band
 
@@ -210,6 +242,20 @@ class _WindowControls(QtCore.QObject):
                     self.mw.showMaximized()
             else:
                 handle.startSystemMove()
+            return True
+        return False
+
+    def _dialog_mouse(self, win, obj, ev):
+        if (ev.type() != QtCore.QEvent.MouseButtonPress or not _is_dialog(win)
+                or not win.windowFlags() & QtCore.Qt.FramelessWindowHint):
+            return False
+        handle = win.windowHandle()
+        edges = _edges_at(win, ev.globalPosition().toPoint())
+        if edges is not None:
+            handle.startSystemResize(edges)
+            return True
+        if _is_background(obj):
+            handle.startSystemMove()
             return True
         return False
 
