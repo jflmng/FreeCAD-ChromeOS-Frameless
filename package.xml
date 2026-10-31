@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+  <name>ChromeOS Frameless</name>
+  <description>Removes the ChromeOS title bar from FreeCAD's main window on Chromebook Linux (Crostini), adding drag-to-move, edge resizing and minimise / maximise / close buttons on the menu bar.</description>
+  <version>0.1.0</version>
+  <date>2026-10-31</date>
+  <maintainer email="103730281+jflmng@users.noreply.github.com">James Fleming</maintainer>
+  <author>James Fleming</author>
+  <license file="LICENSE">LGPL-2.1-or-later</license>
+  <url type="repository" branch="main">https://github.com/jflmng/FreeCAD-ChromeOS-Frameless</url>
+  <url type="bugtracker">https://github.com/jflmng/FreeCAD-ChromeOS-Frameless/issues</url>
+  <url type="readme">https://github.com/jflmng/FreeCAD-ChromeOS-Frameless/blob/main/README.md</url>
+  <icon>Resources/icons/ChromeOSFrameless.svg</icon>
+  <freecadmin>1.0.0</freecadmin>
+  <tag>ChromeOS</tag>
+  <tag>Chromebook</tag>
+  <tag>Crostini</tag>
+  <tag>UI</tag>
+
+  <!-- Declared as a workbench only because FreeCAD runs InitGui.py solely for
+       workbench content; no workbench is registered. -->
+  <content>
+    <workbench>
+      <name>ChromeOS Frameless</name>
+      <subdirectory>./</subdirectory>
+    </workbench>
+  </content>
+</package>
